@@ -2,6 +2,7 @@ import sys
 import csv
 import os
 import sqlparse
+from collections import OrderedDict
 
 identifiers = []
 database_dict = {}
@@ -28,20 +29,34 @@ def read_metadata():
 
 
 def validate_columns(column_list, table_list):
-    vaid_cols = {}
+    cols_dict = {}
+    for table in table_list:
+        for col_list in database_dict[table.strip()]:
+            for col in col_list:
+                if col in list(cols_dict.keys()):
+                    cols_dict[col] = 2
+                else:
+                    cols_dict[col] = 1
+
+    for col in column_list:
+        if cols_dict[col] == 2:
+            print("[Attribute Error]: Ambigous Attribute.\n")
+            sys.exit(1)
+
+    valid_cols = {}
     offset = 0
     for table in table_list:
         for col in column_list:
-            if col not in list(vaid_cols.keys()):
-                vaid_cols[col] = -1
+            if col not in list(valid_cols.keys()):
+                valid_cols[col] = -1
             if col in database_dict[table.strip()]:
                 index = database_dict[table.strip()].index(col)
-                vaid_cols[col] = index + offset
+                valid_cols[col] = index + offset
         offset += len(database_dict[table.strip()])
-    if -1 in list(vaid_cols.values()):
+    if -1 in list(valid_cols.values()):
         return -1
     else:
-        return vaid_cols
+        return valid_cols
 
 def check_valid_agg_syntax(attribute_list):
     agg_funcs = ['sum', 'max', 'min', 'avg']
@@ -118,6 +133,45 @@ def avg_agg_func(col_name, table_name):
     return avg/len(row) 
 
 
+def project_join_query(table, join_cols):
+    join_dict = OrderedDict()
+    for item in join_cols:
+        table_name, col_name = item.split('.')
+        join_dict[table_name] = col_name
+    indices = []
+    ignore_col = [list(join_dict.keys())[1], join_dict[list(join_dict.keys())[1]]]
+    offset = 0
+    for table_name in join_dict.keys():
+        indices.append(database_dict[table_name].index(join_dict[table_name]) + offset)
+        offset += len(database_dict[table_name])
+    
+    temp_table = []
+    for row in table:
+        if row[indices[0]] == row[indices[1]]:
+            row.pop(indices[1])
+            temp_table.append(row)
+
+    header = []
+    flag = 0
+    for key in database_dict:
+        if key == ignore_col[0]:
+            flag = 1
+        for item in database_dict[key]:
+            if flag and item == ignore_col[1]:
+                continue
+            else:
+                header.append(key + '.' + item)
+    print(",".join(header) + "\n")
+    for row in temp_table:
+        for item in row:
+            if row.index(item) == len(row)-1:
+                print(str(item), end = "")
+            else:
+                print(str(item) + ",", end = "")
+        print()
+
+
+
 def project_aggregation(agg_dict, table_name):
     valid = True
     for key in list(agg_dict.keys()):
@@ -151,7 +205,6 @@ def project_aggregation(agg_dict, table_name):
         sys.exit(1)
 
 
-
 def project_some_cols(index_list, table, table_list):
     header = []
     for col in list(index_list.keys()):
@@ -159,8 +212,7 @@ def project_some_cols(index_list, table, table_list):
             if col in database_dict[table_name.strip()]:
                 header.append(table_name + '.' + col)
                 break
-    head = "\t".join(header)
-    print(head)
+    print("\t".join(header) + "\n")
 
     if is_distinct:
         x = str()
@@ -176,7 +228,7 @@ def project_some_cols(index_list, table, table_list):
     else:    
         for row in table:
             for index in index_list.values():
-                print(str(row[index]) + "\t\t", end = " ")
+                print(str(row[index]) + "\t\t", end = "")
             print()
 
 
@@ -236,11 +288,21 @@ def process_query(query):
         sys.exit(1)
 
     if '*' in identifiers[1] and len(identifiers[1].split(', ')) == 1:
-        header = []
-        for table_name in table_list:
-            for column in database_dict[table_name.strip()]:
-                header.append(table_name + "." + column + ",")
-        project_table(table, header)
+        if 'where' in identifiers[4]:
+            valid_query = True
+            join_cols = identifiers[4].strip().split()[1].split('=')
+            for item in join_cols:
+                table_name, col_name = item.split('.')
+                if col_name not in database_dict[table_name]:
+                    valid_query = False
+                    break
+            project_join_query(table, join_cols)
+        else:
+            header = []
+            for table_name in table_list:
+                for column in database_dict[table_name.strip()]:
+                    header.append(table_name + "." + column + ",")
+            project_table(table[:], header)
 
     elif '*' not in identifiers[1] and len(identifiers[1].split(", ")) >= 1:
         if '(' not in identifiers[1]:
@@ -257,7 +319,6 @@ def process_query(query):
                 project_aggregation(agg, table_list[0].strip())
             else:
                 return -1
-
     else:
         return -1
 
